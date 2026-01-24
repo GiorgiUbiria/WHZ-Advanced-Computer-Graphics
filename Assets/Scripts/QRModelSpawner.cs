@@ -83,7 +83,7 @@ public class QRModelSpawner : MonoBehaviour
 
     [Header("QR Code to Model Mapping")]
     [Tooltip("Array of QR code IDs and their corresponding statue prefabs")]
-    public QRPair[] qrPairs = new QRPair[3];
+    public QRPair[] qrPairs = new QRPair[4];
 
     [Header("Spawn Settings")]
     [Tooltip("Position offset from QR code center (in meters)")]
@@ -108,6 +108,10 @@ public class QRModelSpawner : MonoBehaviour
     private Dictionary<string, MRUKTrackable> activeTrackables = new Dictionary<string, MRUKTrackable>();
     private Dictionary<string, bool> spawnInProgress = new Dictionary<string, bool>();
     private readonly object stateLock = new object(); // Thread-safe state management
+    
+    // Cached camera references for performance
+    private Camera cachedXRCamera = null;
+    private GameObject cachedXROrigin = null;
 
     void Start()
     {
@@ -121,6 +125,9 @@ public class QRModelSpawner : MonoBehaviour
         }
 
         BuildQRDictionary();
+
+        // Cache XR Origin and camera references for performance
+        CacheCameraReferences();
 
         mrukInstance.SceneSettings.TrackableAdded.AddListener(OnTrackableAdded);
         mrukInstance.SceneSettings.TrackableRemoved.AddListener(OnTrackableRemoved);
@@ -166,6 +173,28 @@ public class QRModelSpawner : MonoBehaviour
     }
 
     /// <summary>
+    /// Caches XR Origin and camera references to avoid expensive GameObject.Find() calls.
+    /// </summary>
+    void CacheCameraReferences()
+    {
+        cachedXROrigin = GameObject.Find("XR Origin");
+        if (cachedXROrigin != null)
+        {
+            Camera[] cameras = cachedXROrigin.GetComponentsInChildren<Camera>();
+            if (cameras != null && cameras.Length > 0)
+            {
+                cachedXRCamera = cameras[0];
+                LogDebug("Cached XR Origin camera reference.");
+            }
+        }
+        
+        if (cachedXRCamera == null)
+        {
+            LogDebug("XR Origin camera not found. Will use Camera.main as fallback.");
+        }
+    }
+
+    /// <summary>
     /// Normalizes QR code string for consistent matching (uppercase, trimmed).
     /// </summary>
     string NormalizeQRKey(string qrId)
@@ -176,6 +205,10 @@ public class QRModelSpawner : MonoBehaviour
     /// <summary>
     /// Called when MRUK detects a new trackable. Filters for QR codes and triggers model spawning.
     /// Handles all permutations reliably - order independent, quantity independent.
+    /// 
+    /// Optimization: When multiple QR codes are active, defers spawning to CheckActiveTrackables
+    /// to select the closest one, preventing flickering. Only spawns immediately if this is the
+    /// only active QR code.
     /// </summary>
     void OnTrackableAdded(MRUKTrackable trackable)
     {
@@ -209,9 +242,11 @@ public class QRModelSpawner : MonoBehaviour
         }
 
         // Always update trackable reference (handles re-detection, order changes, etc.)
+        int activeTrackableCount;
         lock (stateLock)
         {
             activeTrackables[qrKey] = trackable;
+            activeTrackableCount = activeTrackables.Count;
         }
 
         // Check if model is already active and valid - if so, just update reference
@@ -228,7 +263,16 @@ public class QRModelSpawner : MonoBehaviour
             return;
         }
 
-        // Request spawn - this handles all permutations reliably
+        // Optimization: If multiple QR codes are active, let CheckActiveTrackables handle selection
+        // based on distance to avoid flickering. Only spawn immediately if this is the only active QR.
+        if (activeTrackableCount > 1)
+        {
+            LogDebug($"Multiple QR codes active ({activeTrackableCount}). Deferring to CheckActiveTrackables for closest selection.");
+            // CheckActiveTrackables will handle spawning the closest QR code on its next cycle (0.2s)
+            return;
+        }
+
+        // Only one QR code active (or this is the first one) - spawn immediately
         RequestSpawnModel(matchedPair, trackable, qrKey);
     }
 
@@ -258,10 +302,9 @@ public class QRModelSpawner : MonoBehaviour
     /// </summary>
     IEnumerator SpawnModelDelayed(QRPair pair, MRUKTrackable trackable)
     {
-        // Wait a few frames for transform to initialize
+        // Wait for frame end and one more frame for transform to initialize
+        yield return new WaitForEndOfFrame();
         yield return null;
-        yield return null;
-        yield return null; // Extra frame for reliability
         
         // Validate trackable is still valid
         if (!IsTrackableValid(trackable))
@@ -439,22 +482,20 @@ public class QRModelSpawner : MonoBehaviour
     /// <summary>
     /// Finds and returns the active viewer camera (XR Origin camera for VR, or Main Camera).
     /// Also returns camera position via out parameter.
+    /// Uses cached references for better performance.
     /// </summary>
     Camera GetViewerCamera(out Vector3 cameraPosition)
     {
         cameraPosition = Vector3.zero;
         
-        GameObject xrOrigin = GameObject.Find("XR Origin");
-        if (xrOrigin != null)
+        // Use cached XR camera if available
+        if (cachedXRCamera != null && cachedXRCamera.gameObject != null && cachedXRCamera.gameObject.activeInHierarchy)
         {
-            Camera[] cameras = xrOrigin.GetComponentsInChildren<Camera>();
-            if (cameras != null && cameras.Length > 0)
-            {
-                cameraPosition = cameras[0].transform.position;
-                return cameras[0];
-            }
+            cameraPosition = cachedXRCamera.transform.position;
+            return cachedXRCamera;
         }
         
+        // Fallback to Camera.main
         Camera mainCamera = Camera.main;
         if (mainCamera != null)
         {
@@ -480,11 +521,7 @@ public class QRModelSpawner : MonoBehaviour
             {
                 LogDebug($"Hiding model '{pair.qrId}' (GameObject: {pair.spawnedInstance.name})");
                 
-                // Check if object still exists before destroying
-                if (pair.spawnedInstance != null)
-                {
-                    Destroy(pair.spawnedInstance);
-                }
+                Destroy(pair.spawnedInstance);
                 pair.spawnedInstance = null;
                 
                 if (currentlyActivePair == pair)
@@ -518,7 +555,8 @@ public class QRModelSpawner : MonoBehaviour
 
     /// <summary>
     /// Called when MRUK removes a trackable. Cleans up associated model and tracking data.
-    /// Handles all edge cases reliably.
+    /// Handles all edge cases reliably. If the removed QR was the active one, immediately
+    /// checks for another QR to display to avoid delay.
     /// </summary>
     void OnTrackableRemoved(MRUKTrackable trackable)
     {
@@ -535,6 +573,9 @@ public class QRModelSpawner : MonoBehaviour
         string qrKey = NormalizeQRKey(qrPayload);
         LogDebug($"QR code removed: '{qrPayload}'");
 
+        QRPair removedPair = null;
+        bool wasActivePair = false;
+        
         lock (stateLock)
         {
             activeTrackables.Remove(qrKey);
@@ -542,9 +583,115 @@ public class QRModelSpawner : MonoBehaviour
 
             if (qrPairDict.TryGetValue(qrKey, out QRPair matchedPair))
             {
+                removedPair = matchedPair;
+                wasActivePair = (currentlyActivePair == matchedPair);
                 HideModel(matchedPair);
             }
         }
+
+        // If the removed QR was the active one, immediately check for another QR to display
+        // This avoids waiting up to 0.2 seconds for CheckActiveTrackables to run
+        if (wasActivePair && removedPair != null)
+        {
+            LogDebug($"Active QR '{qrPayload}' was removed. Immediately checking for another QR to display.");
+            StartCoroutine(CheckAndSpawnClosestQR());
+        }
+    }
+
+    /// <summary>
+    /// Finds and spawns the closest active QR code to the camera.
+    /// Returns true if a QR was found and spawned, false otherwise.
+    /// </summary>
+    bool FindAndSpawnClosestQR()
+    {
+        if (mrukInstance == null || mrukInstance.SceneSettings == null)
+            return false;
+
+        Camera viewerCamera = GetViewerCamera(out Vector3 cameraPosition);
+        if (viewerCamera == null)
+            return false;
+
+        // Find closest QR code that should be displayed
+        MRUKTrackable closestTrackable = null;
+        string closestKey = null;
+        float closestDistance = float.MaxValue;
+        QRPair closestPair = null;
+
+        // Create snapshot of active trackables to avoid modification during iteration
+        List<KeyValuePair<string, MRUKTrackable>> trackablesSnapshot;
+        lock (stateLock)
+        {
+            trackablesSnapshot = activeTrackables.ToList();
+        }
+
+        foreach (var kvp in trackablesSnapshot)
+        {
+            string qrKey = kvp.Key;
+            MRUKTrackable trackable = kvp.Value;
+
+            // Remove invalid trackables
+            if (!IsTrackableValid(trackable) || !trackable.IsTracked)
+            {
+                lock (stateLock)
+                {
+                    activeTrackables.Remove(qrKey);
+                }
+                continue;
+            }
+
+            if (!qrPairDict.TryGetValue(qrKey, out QRPair pair))
+                continue;
+
+            // Skip if spawn in progress
+            if (IsSpawnInProgress(qrKey))
+                continue;
+
+            // Check if this QR should be displayed
+            if (!ShouldDisplayQR(pair))
+                continue;
+
+            // Calculate distance and track closest
+            float distance = Vector3.Distance(cameraPosition, trackable.transform.position);
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closestTrackable = trackable;
+                closestKey = qrKey;
+                closestPair = pair;
+            }
+        }
+
+        // Switch to closest QR if found
+        if (closestTrackable != null && closestPair != null && ShouldDisplayQR(closestPair))
+        {
+            // Validate trackable is still valid before switching
+            if (!IsTrackableValid(closestTrackable))
+            {
+                lock (stateLock)
+                {
+                    activeTrackables.Remove(closestKey);
+                }
+                return false;
+            }
+
+            LogDebug($"[FindAndSpawnClosestQR] Switching to QR '{closestKey}' (distance: {closestDistance:F2}m). Current: {(currentlyActivePair?.qrId ?? "None")}");
+
+            // Use the same spawn request method for consistency
+            RequestSpawnModel(closestPair, closestTrackable, closestKey);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Coroutine wrapper for FindAndSpawnClosestQR that waits one frame to ensure
+    /// state is updated after OnTrackableRemoved.
+    /// </summary>
+    IEnumerator CheckAndSpawnClosestQR()
+    {
+        yield return null; // Wait one frame for state to settle
+        FindAndSpawnClosestQR();
     }
 
     /// <summary>
@@ -556,82 +703,7 @@ public class QRModelSpawner : MonoBehaviour
         while (true)
         {
             yield return new WaitForSeconds(0.2f);
-
-            if (mrukInstance == null || mrukInstance.SceneSettings == null)
-                continue;
-
-            Camera viewerCamera = GetViewerCamera(out Vector3 cameraPosition);
-            if (viewerCamera == null)
-                continue;
-
-            // Find closest QR code that should be displayed
-            MRUKTrackable closestTrackable = null;
-            string closestKey = null;
-            float closestDistance = float.MaxValue;
-            QRPair closestPair = null;
-
-            // Create snapshot of active trackables to avoid modification during iteration
-            List<KeyValuePair<string, MRUKTrackable>> trackablesSnapshot;
-            lock (stateLock)
-            {
-                trackablesSnapshot = activeTrackables.ToList();
-            }
-
-            foreach (var kvp in trackablesSnapshot)
-            {
-                string qrKey = kvp.Key;
-                MRUKTrackable trackable = kvp.Value;
-
-                // Remove invalid trackables
-                if (!IsTrackableValid(trackable) || !trackable.IsTracked)
-                {
-                    lock (stateLock)
-                    {
-                        activeTrackables.Remove(qrKey);
-                    }
-                    continue;
-                }
-
-                if (!qrPairDict.TryGetValue(qrKey, out QRPair pair))
-                    continue;
-
-                // Skip if spawn in progress
-                if (IsSpawnInProgress(qrKey))
-                    continue;
-
-                // Check if this QR should be displayed
-                if (!ShouldDisplayQR(pair))
-                    continue;
-
-                // Calculate distance and track closest
-                float distance = Vector3.Distance(cameraPosition, trackable.transform.position);
-                if (distance < closestDistance)
-                {
-                    closestDistance = distance;
-                    closestTrackable = trackable;
-                    closestKey = qrKey;
-                    closestPair = pair;
-                }
-            }
-
-            // Switch to closest QR if found
-            if (closestTrackable != null && closestPair != null && ShouldDisplayQR(closestPair))
-            {
-                // Validate trackable is still valid before switching
-                if (!IsTrackableValid(closestTrackable))
-                {
-                    lock (stateLock)
-                    {
-                        activeTrackables.Remove(closestKey);
-                    }
-                    continue;
-                }
-
-                LogDebug($"[CheckActiveTrackables] Switching to QR '{closestKey}' (distance: {closestDistance:F2}m). Current: {(currentlyActivePair?.qrId ?? "None")}");
-
-                // Use the same spawn request method for consistency
-                RequestSpawnModel(closestPair, closestTrackable, closestKey);
-            }
+            FindAndSpawnClosestQR();
         }
     }
 
@@ -671,7 +743,8 @@ public class QRModelSpawner : MonoBehaviour
         if (pair == null || pair.spawnedInstance == null)
             return false;
 
-        // Check if object was destroyed
+        // Unity's == null check handles destroyed objects
+        // If object was destroyed, Unity overloads == to return true
         if (pair.spawnedInstance == null)
         {
             pair.spawnedInstance = null; // Clean up reference
@@ -703,7 +776,7 @@ public class QRModelSpawner : MonoBehaviour
 
     /// <summary>
     /// Checks if spawn is in progress for a QR key.
-    /// Thread-safe.
+    /// Thread-safe. Since keys are removed when spawn completes, we only need to check if key exists.
     /// </summary>
     bool IsSpawnInProgress(string qrKey)
     {
@@ -712,13 +785,13 @@ public class QRModelSpawner : MonoBehaviour
 
         lock (stateLock)
         {
-            return spawnInProgress.ContainsKey(qrKey) && spawnInProgress[qrKey];
+            return spawnInProgress.ContainsKey(qrKey);
         }
     }
 
     /// <summary>
-    /// Clears spawn in progress flag for a QR ID.
-    /// Thread-safe.
+    /// Clears spawn in progress flag for a QR ID by removing the key.
+    /// Thread-safe. Prevents memory leak from accumulating dictionary keys.
     /// </summary>
     void ClearSpawnInProgress(string qrId)
     {
@@ -727,10 +800,7 @@ public class QRModelSpawner : MonoBehaviour
 
         lock (stateLock)
         {
-            if (spawnInProgress.ContainsKey(qrId))
-            {
-                spawnInProgress[qrId] = false;
-            }
+            spawnInProgress.Remove(qrId);
         }
     }
 

@@ -223,7 +223,7 @@ GameObject:
   - component: {fileID: 203500902}
   - component: {fileID: 203500901}
   m_Layer: 0
-  m_Name: GameObject
+  m_Name: AR Session
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -755,7 +755,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::QRModelSpawner
   qrPairs:
   - qrId: BARBARA
-    statuePrefab: {fileID: 6718364308951360277, guid: 70637d7fac5f7164f86def240bba0da5, type: 3}
+    statuePrefab: {fileID: 6572950025393013742, guid: b1ba9b42e5c6dd2489a0bab171a83043, type: 3}
     modelPositionOffset: {x: 0, y: 0, z: 0}
     modelRotationOffset: {x: 0, y: 0, z: 0}
     spawnedInstance: {fileID: 0}

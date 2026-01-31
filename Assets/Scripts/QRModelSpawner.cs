@@ -411,7 +411,7 @@ public class QRModelSpawner : MonoBehaviour
             string qrKey = kvp.Key;
             MRUKTrackable trackable = kvp.Value;
 
-            if (!IsTrackableValid(trackable) || (trackable != null && !trackable.IsTracked))
+            if (!IsTrackableValid(trackable))
             {
                 lock (stateLock)
                 {
@@ -421,6 +421,8 @@ public class QRModelSpawner : MonoBehaviour
                 }
                 continue;
             }
+            if (!trackable.IsTracked)
+                continue;
 
             if (!qrPairDict.TryGetValue(qrKey, out QRPair pair)) continue;
 

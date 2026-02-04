@@ -350,8 +350,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 410087039}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.40821788, y: -0.23456968, z: 0.10938163, w: 0.8754261}
-  m_LocalPosition: {x: 0, y: 3, z: 0}
+  m_LocalRotation: {x: 0.36018598, y: -0.048943818, z: 0.018927202, w: 0.93140346}
+  m_LocalPosition: {x: 193.13501, y: 422.41156, z: -294.40515}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -760,17 +760,17 @@ MonoBehaviour:
     modelRotationOffset: {x: 0, y: 0, z: 0}
     spawnedInstance: {fileID: 0}
   - qrId: HERMANN
-    statuePrefab: {fileID: 9188142810972818476, guid: 43fb5376f27295348861c4f2a36ef68d, type: 3}
+    statuePrefab: {fileID: 4493603761609129227, guid: b7dc2f006f1083d42b20c19b6bbe9ea0, type: 3}
     modelPositionOffset: {x: 0, y: 0, z: 0}
     modelRotationOffset: {x: 0, y: 0, z: 0}
     spawnedInstance: {fileID: 0}
   - qrId: STEPHAN
-    statuePrefab: {fileID: 4543445324358881350, guid: e6dc7195f25451c44b0fdc2ba09dffe0, type: 3}
+    statuePrefab: {fileID: 7501748714232962691, guid: fe87ee5305739d4458eaef71254c0c24, type: 3}
     modelPositionOffset: {x: 0, y: 0, z: 0}
     modelRotationOffset: {x: 0, y: 0, z: 0}
     spawnedInstance: {fileID: 0}
   - qrId: KATHARINA
-    statuePrefab: {fileID: 6241088266566478921, guid: 056a4073f8edb6e419aacd4b5d3db16a, type: 3}
+    statuePrefab: {fileID: 6067810464997684890, guid: d233eea6982f6044fa43f4a1d8926d30, type: 3}
     modelPositionOffset: {x: 0, y: 0, z: 0}
     modelRotationOffset: {x: 0, y: 0, z: 0}
     spawnedInstance: {fileID: 0}

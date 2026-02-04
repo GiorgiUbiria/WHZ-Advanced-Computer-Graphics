@@ -79,15 +79,18 @@ public class QRModelSpawner : MonoBehaviour
     void BuildQRDictionary()
     {
         qrPairDict.Clear();
+        if (qrPairs == null) return;
         foreach (var pair in qrPairs)
         {
+            if (pair == null) continue;
             if (pair.statuePrefab == null) { Debug.LogWarning($"QRModelSpawner: QR '{pair.qrId}' has no prefab."); continue; }
             if (string.IsNullOrEmpty(pair.qrId)) { Debug.LogWarning($"QRModelSpawner: Prefab '{pair.statuePrefab.name}' has empty QR ID."); continue; }
             string key = NormalizeQRKey(pair.qrId);
+            if (string.IsNullOrEmpty(key)) { Debug.LogWarning($"QRModelSpawner: QR ID normalizes to empty for '{pair.qrId}'."); continue; }
             if (!qrPairDict.ContainsKey(key)) qrPairDict[key] = pair;
-            else Debug.LogWarning($"QRModelSpawner: Duplicate QR ID '{pair.qrId}' ignored.");
+            else Debug.LogWarning($"QRModelSpawner: Duplicate QR ID '{pair.qrId}' (key: '{key}') ignored.");
         }
-        LogDebug($"Built dictionary with {qrPairDict.Count} valid QR pairs.");
+        LogDebug($"Built dictionary with {qrPairDict.Count} valid QR pairs: {string.Join(", ", qrPairDict.Keys)}");
     }
 
     void CacheCameraReferences()
@@ -109,9 +112,13 @@ public class QRModelSpawner : MonoBehaviour
         }
     }
 
+    /// <summary>Normalize QR payload for lookup: casing, BOM, newlines and surrounding whitespace do not affect matching.</summary>
     string NormalizeQRKey(string qrId)
     {
-        return qrId.ToUpper().Trim();
+        if (string.IsNullOrEmpty(qrId)) return "";
+        string s = qrId.Replace("\r", "").Replace("\n", "").Trim();
+        if (s.Length > 0 && s[0] == '\uFEFF') s = s.Substring(1).Trim(); // UTF-8 BOM
+        return s.ToUpperInvariant();
     }
 
     void OnTrackableAdded(MRUKTrackable trackable)
@@ -247,6 +254,8 @@ public class QRModelSpawner : MonoBehaviour
         ApplyRotation(spawnedModel, trackable, pair);
         if (scaleMultiplier != 1.0f) spawnedModel.transform.localScale *= scaleMultiplier;
 
+        DisableCamerasInSpawnedModel(spawnedModel);
+
         lock (stateLock)
         {
             pair.spawnedInstance = spawnedModel;
@@ -265,39 +274,52 @@ public class QRModelSpawner : MonoBehaviour
     {
         if (normalizeModelOrientation)
         {
-            // Face model toward camera/viewer
+            // Same as Barbara: QR is position anchor only; model stays upright (world up) on top of QR.
             Camera viewerCamera = GetViewerCamera(out Vector3 viewerPosition);
             Vector3 directionToViewer = viewerCamera != null
                 ? (viewerPosition - trackable.transform.position).normalized
                 : -trackable.transform.forward;
 
-            Vector3 qrUp = trackable.transform.up;
-            if (Mathf.Abs(Vector3.Dot(directionToViewer, qrUp)) > 0.9f)
-            {
-                qrUp = Vector3.up;
-            }
+            Vector3 horizontalForward = new Vector3(directionToViewer.x, 0f, directionToViewer.z);
+            if (horizontalForward.sqrMagnitude < 0.01f)
+                horizontalForward = new Vector3(-trackable.transform.forward.x, 0f, -trackable.transform.forward.z);
+            horizontalForward.Normalize();
 
-            spawnedModel.transform.rotation = Quaternion.LookRotation(directionToViewer, qrUp);
+            spawnedModel.transform.rotation = Quaternion.LookRotation(horizontalForward, Vector3.up);
+        }
+        else
+        {
+            spawnedModel.transform.rotation = trackable.transform.rotation;
         }
 
-        // Apply rotation offset
         Vector3 rotationOffset = GetRotationOffset(pair);
         if (rotationOffset != Vector3.zero)
         {
             if (normalizeModelOrientation)
-            {
                 spawnedModel.transform.localRotation *= Quaternion.Euler(rotationOffset);
-            }
             else
-            {
                 spawnedModel.transform.localRotation = Quaternion.Euler(rotationOffset);
-            }
         }
     }
 
     Vector3 GetRotationOffset(QRPair pair)
     {
         return pair.modelRotationOffset != Vector3.zero ? pair.modelRotationOffset : rotationOffset;
+    }
+
+    /// <summary>Disable any Camera components in the spawned model so the XR/main camera is used. Lets you restore the previously removed object in Hermann/Stephan/Katharina prefabs without double cameras.</summary>
+    void DisableCamerasInSpawnedModel(GameObject root)
+    {
+        if (root == null) return;
+        Camera[] cameras = root.GetComponentsInChildren<Camera>(true);
+        for (int i = 0; i < cameras.Length; i++)
+        {
+            if (cameras[i] != null && cameras[i].enabled)
+            {
+                cameras[i].enabled = false;
+                LogDebug($"Disabled camera on '{cameras[i].gameObject.name}' in spawned model.");
+            }
+        }
     }
 
     Camera GetViewerCamera(out Vector3 cameraPosition)
